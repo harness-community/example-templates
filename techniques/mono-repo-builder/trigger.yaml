@@ -1,0 +1,33 @@
+trigger:
+  name: Push Trigger on PR Merge
+  identifier: Push_Trigger_on_PR_Merge
+  enabled: true
+  stagesToExecute: []
+  description: ""
+  tags: {}
+  encryptedWebhookSecretIdentifier: ""
+  orgIdentifier: default
+  projectIdentifier: Test_Bed
+  pipelineIdentifier: matrix_changed_files_trigger
+  source:
+    type: Webhook
+    spec:
+      type: Github
+      spec:
+        type: Push
+        spec:
+          connectorRef: account.suranc_GitHub_App_Account_Level
+          autoAbortPreviousExecutions: false
+          payloadConditions:
+            - key: changedFiles
+              operator: StartsWith
+              value: docs/
+            - key: targetBranch
+              operator: Equals
+              value: master
+            - key: <+trigger.payload.head_commit.committer.username>
+              operator: Equals
+              value: web-flow
+          headerConditions: []
+          repoName: harness-sandbox-nonprotected
+          actions: []

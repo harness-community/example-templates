@@ -1,0 +1,97 @@
+pipeline:
+  name: matrix changed files trigger
+  identifier: matrix_changed_files_trigger
+  projectIdentifier: Test_Bed
+  orgIdentifier: default
+  tags: {}
+  stages:
+    - stage:
+        name: Process Changed Files
+        identifier: Process_Changed_Files
+        description: ""
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: Calculate Changed Directories
+                  identifier: Calculate_Changed_Directories
+                  spec:
+                    shell: Bash
+                    executionTarget: {}
+                    source:
+                      type: Inline
+                      spec:
+                        script: |-
+                          echo "Calculating Paths for all files changed in <+stage.variables.base_path>"
+                          base_path=$(echo <+stage.variables.base_path> | sed 's/\/$//' | sed 's/\//\n/g'|wc -l)
+                          export CHANGED_DIRS=$(echo <+trigger.changedFiles> | grep "<+stage.variables.base_path>" | sed 's/^\[//'|sed 's/\]$//' | sed 's/,/\n/g' | cut -d'/' -f1-$(($base_path + 1)) | sort -u | tr '\n' ',')
+                          echo "Changed files: <+trigger.changedFiles>"
+                          echo "Directories containing changed files: $CHANGED_DIRS"
+                    environmentVariables: []
+                    outputVariables:
+                      - name: CHANGED_DIRS
+                        type: String
+                        value: CHANGED_DIRS
+                  timeout: 10m
+        tags: {}
+        variables:
+          - name: base_path
+            type: String
+            description: ""
+            required: false
+            value: docs/subdir
+    - stage:
+        name: Build
+        identifier: Build
+        description: ""
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: ShellScript_1
+                  identifier: ShellScript_1
+                  spec:
+                    shell: Bash
+                    executionTarget: {}
+                    source:
+                      type: Inline
+                      spec:
+                        script: echo "Building in dir <+repeat.item>"
+                    environmentVariables: []
+                    outputVariables: []
+                  timeout: 10m
+        tags: {}
+        strategy:
+          repeat:
+            items: <+pipeline.stages.Process_Changed_Files.spec.execution.steps.Calculate_Changed_Directories.output.outputVariables.CHANGED_DIRS.split(',')>
+            maxConcurrency: 1
+        when:
+          pipelineStatus: Success
+          condition: <+pipeline.stages.Process_Changed_Files.spec.execution.steps.Calculate_Changed_Directories.output.outputVariables.CHANGED_DIRS> != ""
+    - stage:
+        name: Post-Build
+        identifier: PostBuild
+        description: ""
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  type: ShellScript
+                  name: Post Build Actions
+                  identifier: Post_Build_Actions
+                  spec:
+                    shell: Bash
+                    executionTarget: {}
+                    source:
+                      type: Inline
+                      spec:
+                        script: echo "Running post build actions"
+                    environmentVariables: []
+                    outputVariables: []
+                  timeout: 10m
+        tags: {}

@@ -1,0 +1,246 @@
+template:
+  name: GitOps Rollout with Verification and DB Update
+  type: Stage
+  orgIdentifier: GitOps
+  spec:
+    type: Deployment
+    spec:
+      deploymentType: Kubernetes
+      gitOpsEnabled: true
+      service:
+        serviceRef: <+input>
+        serviceInputs: <+input>
+      execution:
+        steps:
+          - parallel:
+              - step:
+                  type: GitOpsUpdateReleaseRepo
+                  name: Update Release Repo
+                  identifier: updateReleaseRepo
+                  timeout: 10m
+                  spec:
+                    variables:
+                      - name: image_tag
+                        type: String
+                        value: <+artifact.tag>
+                      - name: git_tag
+                        type: String
+                        value: <+pipeline.variables.git_tag>
+                    ignoreMissingValues: false
+                    allowNoFilesChanged: true
+              - stepGroup:
+                  name: Update Schema
+                  identifier: Update_Schema
+                  steps:
+                    - step:
+                        type: DBSchemaApply
+                        name: DBSchemaApply_1
+                        identifier: DBSchemaApply_1
+                        spec:
+                          connectorRef: account.harnessImage
+                          migrationType: Liquibase
+                          dbSchema: <+input>
+                          dbInstance: <+input>
+                        timeout: 10m
+                  stepGroupInfra:
+                    type: KubernetesDirect
+                    spec:
+                      connectorRef: account.ccm_ise_lab
+                  when:
+                    stageStatus: Success
+                    condition: "false"
+          - step:
+              type: MergePR
+              name: Merge PR
+              identifier: mergePR
+              spec:
+                deleteSourceBranch: true
+              timeout: 10m
+          - step:
+              type: GitOpsFetchLinkedApps
+              name: Fetch Linked Apps
+              identifier: fetchLinkedApps
+              timeout: 10m
+              spec: {}
+          - step:
+              type: GitOpsSync
+              name: GitOpsSync_1
+              identifier: GitOpsSync_1
+              spec:
+                prune: false
+                dryRun: false
+                applyOnly: false
+                forceApply: false
+                resourcesFilter:
+                  group: .*
+                  kind: .*
+                  name: .*
+                  namespace: .*
+                  label: .*
+                retryStrategy: {}
+                retry: false
+                syncOptions:
+                  skipSchemaValidation: false
+                  autoCreateNamespace: false
+                  pruneResourcesAtLast: false
+                  applyOutOfSyncOnly: false
+                  replaceResources: false
+                  prunePropagationPolicy: foreground
+                  respectIgnoreDifferences: false
+                  serverSideApply: false
+                waitTillHealthy: false
+                failOnTimeout: false
+                applicationRegex: <+input>
+              timeout: 10m
+          - step:
+              type: GitOpsRollout
+              name: Get Rollout Details
+              identifier: GitOpsRollout_1
+              spec:
+                appName: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].appName>
+                agentIdentifier: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].agentIdentifier>
+                namespace: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].namespace>
+                rolloutName: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].rolloutName>
+                waitUntilHealthStatus:
+                  healthStatus: Suspended
+              timeout: 10m
+          - stepGroup:
+              name: Promote Rollout
+              identifier: Promote_Rollout
+              steps:
+                - step:
+                    type: GitOpsRollout
+                    name: Promote Rollout
+                    identifier: GitOpsRollout_1
+                    spec:
+                      appName: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].appName>
+                      agentIdentifier: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].agentIdentifier>
+                      namespace: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].namespace>
+                      rolloutName: <+stage.spec.execution.steps.GitOpsSync_1.gitops.discoveredRollouts[0].rolloutName>
+                      waitUntilHealthStatus:
+                        healthStatus: Suspended
+                      timeout: 10m
+                      autoRolloutAction: resume
+                    timeout: 10m
+                - step:
+                    type: Verify
+                    name: Verify
+                    identifier: Verify
+                    spec:
+                      isMultiServicesOrEnvs: false
+                      type: Canary
+                      monitoredService:
+                        type: Default
+                        spec: {}
+                      spec:
+                        sensitivity: HIGH
+                        duration: 15m
+                    timeout: 2h
+                    failureStrategies:
+                      - onFailure:
+                          errors:
+                            - Verification
+                          action:
+                            type: ManualIntervention
+                            spec:
+                              timeout: 2h
+                              onTimeout:
+                                action:
+                                  type: StageRollback
+                      - onFailure:
+                          errors:
+                            - Unknown
+                          action:
+                            type: ManualIntervention
+                            spec:
+                              timeout: 2h
+                              onTimeout:
+                                action:
+                                  type: Ignore
+              when:
+                stageStatus: Success
+              strategy:
+                repeat:
+                  times: <+ <+stage.spec.execution.steps.GitOpsRollout_1.gitopsRollout.rolloutStatusResponse.steps.size()> / 2 >
+                  maxConcurrency: 1
+        rollbackSteps:
+          - parallel:
+              - stepGroup:
+                  name: Rollback
+                  identifier: Rollback
+                  steps:
+                    - step:
+                        type: RevertPR
+                        name: Revert PR
+                        identifier: Revert_PR
+                        spec:
+                          commitId: <+stage.spec.execution.steps.mergePR.mergePROutcome.commitId>
+                        timeout: 10m
+                    - step:
+                        type: GitOpsSync
+                        name: GitOpsSync_1
+                        identifier: GitOpsSync_1
+                        spec:
+                          prune: false
+                          dryRun: false
+                          applyOnly: false
+                          forceApply: false
+                          resourcesFilter:
+                            group: .*
+                            kind: .*
+                            name: .*
+                            namespace: .*
+                            label: .*
+                          retryStrategy: {}
+                          retry: false
+                          syncOptions:
+                            skipSchemaValidation: false
+                            autoCreateNamespace: false
+                            pruneResourcesAtLast: false
+                            applyOutOfSyncOnly: false
+                            replaceResources: false
+                            prunePropagationPolicy: foreground
+                            respectIgnoreDifferences: false
+                            serverSideApply: false
+                          applicationRegex: <+input>
+                          waitTillHealthy: true
+                          failOnTimeout: true
+                          degradedStateTimeout: 30m
+                          autoPromoteRolloutBehavior: promote-full
+                        timeout: 10m
+                  when:
+                    stageStatus: Success
+                    condition: <+stage.spec.execution.steps.mergePR.mergePROutcome.commitId> != null
+              - stepGroup:
+                  name: Rollback DB
+                  identifier: Rollback_DB
+                  steps:
+                    - step:
+                        type: DBSchemaRollback
+                        name: DBSchemaRollback_1
+                        identifier: DBSchemaRollback_1
+                        spec:
+                          connectorRef: account.harnessImage
+                          migrationType: Liquibase
+                          dbSchema: <+input>
+                          dbInstance: <+input>
+                          tag: <+execution.steps.Update_Schema.steps.DBSchemaApply_1.output.preStartTag>
+                        timeout: 10m
+                  stepGroupInfra:
+                    type: KubernetesDirect
+                    spec:
+                      connectorRef: account.ccm_ise_lab
+      environment:
+        environmentRef: <+input>
+        deployToAll: <+input>
+        environmentInputs: <+input>
+        gitOpsClusters: <+input>
+    failureStrategies:
+      - onFailure:
+          errors:
+            - AllErrors
+          action:
+            type: StageRollback
+    gitOpsEnabled: true
+  identifier: GitOps_Rollout_with_Verification_and_DB_Update
+  versionLabel: v1
